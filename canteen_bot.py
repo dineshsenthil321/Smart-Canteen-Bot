@@ -123,7 +123,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========= Main =========
 def main():
-    app = ApplicationBuilder().token("7778377562:AAEEnYAvYgBqF8EUQJrUgNiMeBZbd4V5gzo").build()
+    app = ApplicationBuilder().token("Paste your Bot token here").build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", menu))
