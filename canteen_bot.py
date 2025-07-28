@@ -1,8 +1,81 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 import datetime
-import csv
-import os
+import mysql.connector
+
+# ========= MySQL Booking Save Function =========
+def save_booking(username, item):
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="enter your password",
+            database="smart_canteen"
+        )
+        cursor = conn.cursor()
+        query = "INSERT INTO bookings (username, item, status) VALUES (%s, %s, %s)"
+        values = (username, item, "Booked")
+        cursor.execute(query, values)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print(f"[✅ SAVED] {username} booked {item}")
+    except mysql.connector.Error as error:
+        print("[❌ ERROR] saving booking:", error)
+
+# ========= Fetch Last Booking =========
+def get_last_booking(username):
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="1234567890",
+            database="smart_canteen"
+        )
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT * FROM bookings 
+            WHERE username = %s 
+            ORDER BY id DESC 
+            LIMIT 1
+        """, (username,))
+        booking = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return booking
+    except mysql.connector.Error as error:
+        print("Error fetching booking:", error)
+        return None
+
+# ========= Cancel Last Booking =========
+def cancel_last_booking(username):
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="enter your password",
+            database="smart_canteen"
+        )
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT * FROM bookings 
+            WHERE username = %s AND status = 'Booked' 
+            ORDER BY id DESC 
+            LIMIT 1
+        """, (username,))
+        booking = cursor.fetchone()
+        if booking:
+            cursor.execute("UPDATE bookings SET status = 'Cancelled' WHERE id = %s", (booking["id"],))
+            conn.commit()
+            result = True
+        else:
+            result = False
+        cursor.close()
+        conn.close()
+        return result
+    except mysql.connector.Error as error:
+        print("Error cancelling booking:", error)
+        return False
 
 # ========= Menu by Day =========
 menu_data = {
@@ -14,18 +87,6 @@ menu_data = {
     "Saturday": ["Chole Bhature", "Poha", "Khichdi"],
     "Sunday": ["Special Meals", "Fried Rice", "Noodles"]
 }
-
-CSV_FILE = "bookings.csv"
-
-# ========= Save New Booking =========
-def save_booking(username, item):
-    file_exists = os.path.isfile(CSV_FILE)
-    with open(CSV_FILE, mode="a", newline='') as file:
-        writer = csv.writer(file)
-        if not file_exists:
-            writer.writerow(["Name", "Item", "Time", "Status"])
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        writer.writerow([username, item, now, "Booked"])
 
 # ========= /start =========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -60,7 +121,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    user = query.from_user.first_name
+    user = query.from_user.username or query.from_user.first_name
     item = query.data.replace("book_", "")
 
     save_booking(user, item)
@@ -68,62 +129,31 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========= /track =========
 async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    username = update.effective_user.first_name
-
-    try:
-        with open(CSV_FILE, 'r') as file:
-            reader = csv.DictReader(file)
-            rows = list(reader)
-            if not rows:
-                await update.message.reply_text("❌ No bookings found yet.")
-                return
-            for row in reversed(rows):
-                if row.get("Name") == username:
-                    await update.message.reply_text(
-                        f"📦 Your last booking:\n"
-                        f"Item: *{row.get('Item', 'N/A')}*\n"
-                        f"Time: {row.get('Time', 'N/A')}\n"
-                        f"Status: *{row.get('Status', 'N/A')}*",
-                        parse_mode="Markdown"
-                    )
-                    return
-            await update.message.reply_text("❌ No booking found for you.")
-    except FileNotFoundError:
-        await update.message.reply_text("⚠️ Booking file not found.")
-
+    username = update.effective_user.username or update.effective_user.first_name
+    booking = get_last_booking(username)
+    if booking:
+        await update.message.reply_text(
+            f"📦 Your last booking:\n"
+            f"Item: *{booking['item']}*\n"
+            f"Time: {booking['time'].strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"Status: *{booking['status']}*",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text("❌ No booking found.")
 
 # ========= /cancel =========
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    username = update.effective_user.first_name
-    found = False
-
-    try:
-        with open(CSV_FILE, 'r') as file:
-            reader = csv.DictReader(file)
-            bookings = list(reader)
-            headers = reader.fieldnames
-
-        updated_bookings = []
-        for row in bookings:
-            if row["Name"] == username and row["Status"] == "Booked" and not found:
-                row["Status"] = "Cancelled"
-                found = True
-            updated_bookings.append(row)
-
-        if found:
-            with open(CSV_FILE, 'w', newline='') as file:
-                writer = csv.DictWriter(file, fieldnames=headers)
-                writer.writeheader()
-                writer.writerows(updated_bookings)
-            await update.message.reply_text("✅ Your last booking has been cancelled.")
-        else:
-            await update.message.reply_text("❌ No active booking found to cancel.")
-    except FileNotFoundError:
-        await update.message.reply_text("⚠️ Booking file not found.")
+    username = update.effective_user.username or update.effective_user.first_name
+    success = cancel_last_booking(username)
+    if success:
+        await update.message.reply_text("✅ Your last booking has been cancelled.")
+    else:
+        await update.message.reply_text("❌ No active booking found to cancel.")
 
 # ========= Main =========
 def main():
-    app = ApplicationBuilder().token("Paste your Bot token here").build()
+    app = ApplicationBuilder().token("paste your token").build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", menu))
